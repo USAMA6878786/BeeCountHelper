@@ -30,9 +30,9 @@ import java.util.regex.Pattern;
 final class UpdateCheck {
 
     private static final String API =
-            "https://api.github.com/repos/USAMA6878786/beecount-shot/releases/latest";
+            "https://api.github.com/repos/USAMA6878786/BeeCountHelper/releases/latest";
     private static final String FALLBACK =
-            "https://raw.githubusercontent.com/USAMA6878786/beecount-shot/main/update.json";
+            "https://raw.githubusercontent.com/USAMA6878786/BeeCountHelper/main/update.json";
 
     private static final int TIMEOUT_MS = 9000;
 
@@ -175,7 +175,7 @@ final class UpdateCheck {
             conn.setReadTimeout(TIMEOUT_MS);
             conn.setRequestProperty("Accept", "application/vnd.github+json");
             // GitHub API 强制要求 UA，不给就是 403
-            conn.setRequestProperty("User-Agent", "beecount-shot/" + BuildInfo.VERSION_NAME);
+            conn.setRequestProperty("User-Agent", "BeeCountHelper/" + BuildInfo.VERSION_NAME);
             conn.setInstanceFollowRedirects(true);
             int code = conn.getResponseCode();
             if (code != 200) {
