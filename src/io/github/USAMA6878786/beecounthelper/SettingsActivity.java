@@ -23,7 +23,7 @@ import java.util.concurrent.Executor;
 /**
  * 模块设置页。界面用代码搭（不用布局 XML），减少资源依赖，打包链更简单。
  *
- * <p>三块内容：把磁贴/小部件加到系统里、把权限给足、按需调参数；再往下是日志与诊断。
+ * <p>三块内容：把磁贴/小部件加到系统里、把权限给足、按需调参数；再往下是日志。
  *
  * <p>页面**不展示自检结果**。走 headless 之后「进程在不在、hook 装了几条、监听在不在位」
  * 都已经不影响能不能记账（点磁贴时自己拉起进程、自己起引擎派发），把这几项摆在最上面
@@ -211,18 +211,6 @@ public class SettingsActivity extends Activity {
                 showText("常见问题", FAQ);
             }
         });
-        Ui.listItem(this, helpCard, "导出日志", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                exportLogs();
-            }
-        });
-        Ui.listItem(this, helpCard, "跑一次诊断", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                runDiagnostics();
-            }
-        });
         Ui.listItem(this, helpCard, "检查更新", new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -313,7 +301,7 @@ public class SettingsActivity extends Activity {
             + "• LSPosed 里启用本模块，作用域勾选「蜜蜂记账」\n"
             + "• 给本模块 root（截屏、收面板、删图都要用）——蜜蜂记账本体不需要 root\n"
             + "• 打开一次蜜蜂记账，进「智能记账」确认「截图自动记账」是开着的\n"
-            + "• 点上面的「添加」，把「BeeCountHelper」磁贴放进控制中心\n"
+            + "• 点上面的「添加」，把「记账」磁贴放进控制中心\n"
             + "• ⚠️ 必须把蜜蜂记账的省电策略设为「无限制」，否则识别会失败\n\n"
             + "截屏只有一条路：root 直接抓帧（约 0.25 秒）；抓帧失败才退回 root 注入按键。\n\n"
             + "整个过程：收起面板 → 等 0.1 秒 → 截屏 → 弹「截图成功」→ 蜜蜂记账识别 → 识别完成后删图。\n\n"
@@ -328,7 +316,7 @@ public class SettingsActivity extends Activity {
             + "提示「识别失败」？\n"
             + "根因是系统每 5 秒左右冻结一次后台的蜜蜂记账，冻结瞬间掐断它到 AI 的连接（网络报错）。"
             + "识别一次要 3~8 秒，期间几乎必然撞上一次冻结，所以这不是偶发、不设对就会频繁失败。"
-            + "**必须**把蜜蜂记账的省电策略设为「无限制」（系统设置 → 应用 → 蜜蜂记账 → 省电策略），"
+            + "【必须】把蜜蜂记账的省电策略设为「无限制」（系统设置 → 应用 → 蜜蜂记账 → 省电策略），"
             + "设成之后系统就不再冻结它，识别失败才会消失。\n\n"
             + "改了配置不生效？\n"
             + "hook 只在蜜蜂记账启动时注入，点「重启蜜蜂记账」。\n\n"
@@ -336,7 +324,7 @@ public class SettingsActivity extends Activity {
             + "数字是从蜜蜂记账的账本里读的。它没在跑时，模块会自己把它拉起来再取一次"
             + "（无界面、只拉进程），一般几秒内就更新；拉不起来才显示上一次的值。\n\n"
             + "要打开蜜蜂记账才能记账吗？\n"
-            + "不用。点磁贴时模块会自己把它的进程拉起来、起一个**无界面引擎**把截图送进去识别，"
+            + "不用。点磁贴时模块会自己把它的进程拉起来、起一个无界面引擎把截图送进去识别，"
             + "全程不显示它的界面、也不会把它弹到前台。";
 
     @Override
@@ -595,32 +583,6 @@ public class SettingsActivity extends Activity {
         ShotTileService.requestRefresh(this);
     }
 
-    private void exportLogs() {
-        Toast.makeText(this, "正在导出日志…", Toast.LENGTH_SHORT).show();
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                final StringBuilder report = new StringBuilder();
-                boolean logcatOk = RootShell.appendLogcatToDownload();
-                report.append("logcat.txt：")
-                        .append(logcatOk ? "Download/" + Const.LOG_DIR + "/logcat.txt"
-                                : "失败（需要 root）")
-                        .append('\n');
-                String appOut = LogExport.copyToDownload(
-                        SettingsActivity.this, Prefs.appLogPath(SettingsActivity.this), "app.log");
-                report.append("app.log：").append(appOut == null ? "失败" : appOut);
-                final String text = report.toString();
-                Logx.i("[settings] export: " + text.replace('\n', ' '));
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        Toast.makeText(SettingsActivity.this, text, Toast.LENGTH_LONG).show();
-                    }
-                });
-            }
-        }, "bee-log-export").start();
-    }
-
     /**
      * 「检查更新」：问一次 GitHub 上的最新发布，比版本号。
      *
@@ -710,48 +672,6 @@ public class SettingsActivity extends Activity {
         }
     }
 
-    /** 一次性把关键信息写进日志（只开一次 root shell，几秒内完成）。 */
-    private void runDiagnostics() {
-        Toast.makeText(this, "正在诊断…", Toast.LENGTH_SHORT).show();
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                Logx.i("[diag] ===== start =====");
-                Logx.i("[diag] module=" + versionName()
-                        + " android=" + Build.VERSION.RELEASE + " sdk=" + Build.VERSION.SDK_INT
-                        + " model=" + Build.MANUFACTURER + " " + Build.MODEL);
-                Logx.i("[diag] root=" + RootShell.isGranted(SettingsActivity.this));
-
-                String pkg = HostInfo.pkg(SettingsActivity.this);
-                RootShell.collectDiagnostics(pkg);
-
-                ShotBridge.Answer a = ShotBridge.query(getApplicationContext(), "", 4000L);
-                Logx.i("[diag] host answered=" + a.received
-                        + " activityAlive=" + a.activityAlive
-                        + " hooks=" + a.hookCount + "/" + a.hookFailed);
-                if (a.telemetry != null) {
-                    Logx.i("[diag] host telemetry: " + a.telemetry);
-                }
-
-                WidgetBridge.Data w = WidgetBridge.query(getApplicationContext(), 4000L);
-                Logx.i("[diag] widget data ok=" + w.ok + " day=" + w.day
-                        + " week=" + w.week + " month=" + w.month + " " + w.currency
-                        + " | " + w.detail);
-
-                Logx.i("[diag] ===== end =====");
-                RootShell.appendLogcatToDownload();
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        Toast.makeText(SettingsActivity.this,
-                                "诊断完成，请点「导出日志到 Download」",
-                                Toast.LENGTH_LONG).show();
-                    }
-                });
-            }
-        }, "bee-diag").start();
-    }
-
     // v2.20 删除：requestAddWidget() / showManualAddHint()
     //
     // 它们调的是 AppWidgetManager.requestPinAppWidget。小米桌面会返回"支持"，
@@ -835,7 +755,7 @@ public class SettingsActivity extends Activity {
                 .setTitle("手动添加磁贴")
                 .setMessage(why + "\n\n请按这个步骤手动加：\n"
                         + "① 下拉控制中心 → 点右上角「编辑」（铅笔图标）\n"
-                        + "② 在下方「可用磁贴 / 未添加」里找到「BeeCountHelper」\n"
+                        + "② 在下方「可用磁贴 / 未添加」里找到「记账」\n"
                         + "③ 把它拖到上面 → 点完成\n\n"
                         + "加过一次之后就不用再加了。")
                 .setPositiveButton("知道了", null)

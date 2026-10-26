@@ -12,7 +12,7 @@ import android.service.quicksettings.TileService;
 import android.widget.Toast;
 
 /**
- * 控制中心「记账截图」磁贴。
+ * 控制中心「记账」磁贴。
  *
  * <p><b>只有一条截屏路径：root。</b>没有 root 就直接引导用户去授权，不再退无障碍——
  * 理由见类尾的「为什么删掉无障碍那条路」。
@@ -52,7 +52,7 @@ public class ShotTileService extends TileService {
      * <p>它是一颗按钮，不是仪表盘。所以标签、副标题、状态三样东西都是常量：
      * 副标题只说明"点一下干什么"，不带任何"能不能用/正在干什么"的判断。
      */
-    private static final String TILE_LABEL = "记账截图";
+    private static final String TILE_LABEL = "记账";
     private static final String TILE_SUBTITLE = "点一下截屏记账";
 
     @Override
@@ -349,7 +349,7 @@ public class ShotTileService extends TileService {
             Logx.e("[tile] startActivityAndCollapse failed, fallback to toast", t);
         }
         try {
-            Toast.makeText(this, "点一下磁贴记账需要 root：请打开「记账截图」并点「root 权限」",
+            Toast.makeText(this, "点一下磁贴记账需要 root：请打开「BeeCountHelper」并点「root 权限」",
                     Toast.LENGTH_LONG).show();
         } catch (Throwable ignored) {
         }

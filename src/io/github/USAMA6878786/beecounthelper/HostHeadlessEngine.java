@@ -63,6 +63,18 @@ final class HostHeadlessEngine {
      */
     private static final long IDLE_DESTROY_MS = 12_000L;
 
+    /**
+     * 收到 Dart 回执后，至少再等这么久才允许销毁引擎。
+     *
+     * <p><b>为什么需要它（实测 2026-10-26）</b>：蜜蜂记账的 {@code onScreenshotDetected}
+     * 是"先返回、后台继续收尾"的写法——回执只代表处理函数返回了，它写库、发通知可能还没结束。
+     * 原来收到回执 14 毫秒就 {@code destroyEngine()}，把最后一张的落库直接掐断：
+     * 日志里那张只剩「开始处理截图」，永远等不到「AI 识别 + 落库完成」。
+     *
+     * <p>2 秒是"回执 → 落库日志出现"的实测间隔上界；再长会白占内存。
+     */
+    private static final long DESTROY_SETTLE_MS = 2_000L;
+
     /** 空闲检查的粒度。想"到点就销毁"，粒度不能比阈值还粗（原来 15 秒粒度会把 15 秒阈值拖成 30 秒）。 */
     private static final long IDLE_CHECK_MS = 4_000L;
 
@@ -71,6 +83,9 @@ final class HostHeadlessEngine {
 
     /** 最后一次"有活干"的时刻。 */
     private static volatile long lastActivityAt = 0L;
+
+    /** 最后一次收到 Dart 回执的时刻（回执后它还在收尾，不能马上销毁引擎）。 */
+    private static volatile long lastCallbackAt = 0L;
 
     /** 派发了但还没收到回执的路径。非空时不允许销毁引擎（否则把正在跑的识别掐死）。 */
     private static volatile String inflight;
@@ -81,6 +96,19 @@ final class HostHeadlessEngine {
 
     /** 已经删过的路径（兜底时用来跳过）。 */
     private static volatile String cleanedPath;
+
+    /**
+     * 已经收到 Dart 回执的图片路径。
+     *
+     * <p><b>为什么必须是集合而不是一个字段（实测 2026-10-26）</b>：20 秒兜底删图原来靠
+     * {@code wdPath.equals(cleanedPath)} 判断，但 {@code cleanedPath} 只有一个、会被
+     * 后一张覆盖。连点时前一张的回执早就到了，兜底计时器到点却拿它跟"最后一张"比，
+     * 判定成"没回执"，于是日志里一堆假的「20 秒没回执」。
+     * 更要紧的是：如果某张识别真的超过 20 秒，它会在回执前被这个误判删掉。
+     */
+    private static final java.util.Set<String> SETTLED =
+            java.util.Collections.newSetFromMap(
+                    new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
 
     private static volatile String lastDispatched;
 
@@ -155,13 +183,8 @@ final class HostHeadlessEngine {
             yieldPending = true;
             return;
         }
-        Logx.i("[headless] 界面引擎出现了，撤掉无界面引擎（避免两个 Dart 抢同一份 prefs）");
-        new Handler(Looper.getMainLooper()).post(new Runnable() {
-            @Override
-            public void run() {
-                destroyEngine();
-            }
-        });
+        Logx.i("[headless] 界面引擎出现了，准备撤掉无界面引擎（避免两个 Dart 抢同一份 prefs）");
+        destroyWhenSettled("界面引擎出现，且已无进行中的识别");
     }
 
     /** 界面引擎是否已经存在（存在就不该再由我们派发）。 */
@@ -341,7 +364,9 @@ final class HostHeadlessEngine {
                     idleWatchRunning = false;
                     return;
                 }
-                long idle = System.currentTimeMillis() - lastActivityAt;
+                // 回执之后它可能还在收尾，所以"最后一次回执"也算活动时间
+                long last = Math.max(lastActivityAt, lastCallbackAt);
+                long idle = System.currentTimeMillis() - last;
                 if (inflight == null && idle >= IDLE_DESTROY_MS) {
                     idleWatchRunning = false;
                     destroyEngine();
@@ -392,6 +417,39 @@ final class HostHeadlessEngine {
         started = false;
         pendingPath = null;
         lastDispatched = null;
+        yieldPending = false;
+    }
+
+    /**
+     * 等"收尾"之后再销毁引擎：回执后它可能还在写库/发通知，立刻销毁会把这次记账掐断。
+     *
+     * <p>判定条件：没有进行中的派发（{@code inflight == null}），且距最后一次回执已静默
+     * 至少 {@link #DESTROY_SETTLE_MS}。
+     *
+     * <p>如果这期间又来了新任务，就静默放弃（引擎本来就该留着干活）；
+     * 真正的收尾由下一次回执或空闲检查接手。
+     */
+    private static void destroyWhenSettled(final String why) {
+        new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                if (engine == null) {
+                    yieldPending = false;
+                    return;
+                }
+                if (inflight != null) {
+                    // 又来活了：什么都不做，等它自己回执后再走这里
+                    return;
+                }
+                long quiet = System.currentTimeMillis() - lastCallbackAt;
+                if (quiet < DESTROY_SETTLE_MS) {
+                    destroyWhenSettled(why);   // 还在收尾，再等一轮
+                    return;
+                }
+                Logx.i("[headless] " + why + "；回执后已静默 " + quiet + "ms，撤掉无界面引擎");
+                destroyEngine();
+            }
+        }, DESTROY_SETTLE_MS);
     }
 
     /**
@@ -606,6 +664,17 @@ final class HostHeadlessEngine {
                         public Object invoke(Object proxy, Method method, Object[] a) {
                             String n = method.getName();
                             inflight = null;
+                            // 回执只代表"处理函数返回了"，它还在写库/发通知：
+                            // 记下时刻，让销毁逻辑等它收尾（见 DESTROY_SETTLE_MS）。
+                            lastCallbackAt = System.currentTimeMillis();
+                            lastActivityAt = lastCallbackAt;
+                            // 这张已经有回执了：登记下来，让 20 秒兜底别再把它当"没回执"删掉
+                            if (dispatchPath != null) {
+                                SETTLED.add(dispatchPath);
+                                if (SETTLED.size() > 200) {
+                                    SETTLED.clear();   // 只是防无限增长，正常一次连点远到不了 200
+                                }
+                            }
                             new Thread(new Runnable() {
                                 @Override
                                 public void run() {
@@ -613,16 +682,9 @@ final class HostHeadlessEngine {
                                 }
                             }, "bee-tunnel-release").start();
                             if (yieldPending) {
-                                yieldPending = false;
-                                new Handler(Looper.getMainLooper()).post(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        if (inflight == null) {
-                                            Logx.i("[headless] 识别完成，界面引擎在，撤掉无界面引擎");
-                                            destroyEngine();
-                                        }
-                                    }
-                                });
+                                // 注意：**不要**在这里立刻销毁引擎（原来就是这里把落库掐断的）。
+                                // 交给 destroyWhenSettled：它会等回执后静默够久、且没有新任务时才动手。
+                                destroyWhenSettled("界面引擎在，识别已回执");
                             }
                             if ("success".equals(n)) {
                                 Logx.i("[headless] Dart 处理完成，返回=" 
@@ -697,10 +759,13 @@ final class HostHeadlessEngine {
             new Handler(Looper.getMainLooper()).postDelayed(new Runnable() {
                 @Override
                 public void run() {
-                    if (!wdPath.equals(cleanedPath)) {
-                        Logx.w("[headless] 20 秒没回执，兜底删图：" + RootShell.baseName(wdPath));
-                        pushDeleteToModule(wdPath);
+                    // 回执到了就跳过（回执路径里已经安排删图了）。
+                    // 用集合而不是 cleanedPath：连点时后者会被后一张覆盖，导致误判。
+                    if (SETTLED.contains(wdPath)) {
+                        return;
                     }
+                    Logx.w("[headless] 20 秒没回执，兜底删图：" + RootShell.baseName(wdPath));
+                    pushDeleteToModule(wdPath);
                 }
             }, 20_000L);
 
