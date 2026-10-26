@@ -1,0 +1,179 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="io.github.USAMA6878786.beecounthelper">
+
+    <!--
+        版本号不要写在这里。
+
+        aapt2 link 以 manifest 为准：写在这里会盖掉 build.sh 命令行传的版本号参数。
+        真踩过 —— v2.4 之后每个包打出来都还是 versionCode=15 / versionName=2.4，一直没变过。
+
+        唯一来源是 build.sh 顶部的 VERSION_NAME / VERSION_CODE 两行。
+    -->
+
+    <uses-sdk
+        android:minSdkVersion="26"
+        android:targetSdkVersion="35" />
+
+    <!-- 常驻服务（让模块进程不被回收）。specialUse 是 Android 14 起对"不属于其它
+         任何类别的前台服务"的兜底类型。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- 开机自动把常驻服务拉起来（这是 startForegroundService 的合法豁免场景）。 -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!--
+        通知权限。**必须声明**，否则在 Android 13+（targetSdk ≥ 33）的系统设置里，
+        这个应用的通知总开关是**灰的、点不动**——因为系统认为这个应用压根不该发通知。
+
+        有意思的是：**不授予它反而更好看**。Android 13+ 有明确规定，用户拒绝通知权限后，
+        前台服务的提示不再出现在通知栏，只在「任务管理器」里可见。也就是说：
+          · 授予   → 通知栏里有一条静默条目（状态栏无图标），可以再单独关掉渠道；
+          · 不授予 → 通知栏里什么都没有，服务照常常驻。
+        两条路都能用，用户自己挑。
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+        读取照片：只用来判断"最新一张截图是否落盘"（MediaStore 快路），不外传。
+        不给也能用——ShotWatcher 会报告不可用，自动退回 su 扫描。
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+    <!--
+        悬浮窗权限：**只为了"后台也能弹 Toast"**。
+        Android 12+ 会直接把后台应用弹出的 Toast 丢掉（不报错、不显示），
+        而点磁贴时模块就在后台——没有这个权限，截图结果的那句提示根本看不到。
+        模块有 root，会用 `appops set ... SYSTEM_ALERT_WINDOW allow` 自己授一次。
+        如果你不想给：系统设置里可以关掉，截图功能完全不受影响，只是看不到那句提示。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!--
+        联网：**只给「检查更新」用**。模块平时完全不联网——截屏、记账、读账本都是本地的事，
+        这个权限只是为了能问一句 GitHub "有没有新版本"。见 UpdateCheck。
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+        必须声明。模块 targetSdk 35，受 Android 11+ 的包可见性过滤约束：不声明的话
+        getLaunchIntentForPackage("com.tntlikely.beecount") 一定返回 null，
+        表现就是"打开蜜蜂记账"提示找不到应用。
+    -->
+    <queries>
+        <package android:name="com.tntlikely.beecount" />
+        <package android:name="com.tntlikely.beecount.dev" />
+    </queries>
+
+
+    <application
+        android:allowBackup="false"
+        android:description="@string/module_description"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault.Light">
+
+        <!--
+            用 NoActionBar 主题：顶上那条标题栏（"记账截图 · vX.Y"）纯属多余，
+            而且在新系统上还会压住设置页正文的第一行。
+
+            为什么会被压住：Android 15（targetSdk 35）起对应用**强制"边到边"**显示，
+            内容会一直画到状态栏底下；标题栏占着顶部那块地方，正文第一行就藏在它后面。
+            光去掉标题栏还不够，正文自己还要把系统栏的高度让出来——见 SettingsActivity
+            里的 setFitsSystemWindows(true)。
+        -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:launchMode="singleTop"
+            android:theme="@style/BeeCountSettings">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE_PREFERENCES" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".CollapseProxyActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- 桌面小组件：日/周/月支出。添加时先弹 WidgetConfigActivity 调背景透明度。 -->
+        <receiver
+            android:name=".ExpenseWidgetProvider"
+            android:exported="true"
+            android:label="@string/widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="io.github.USAMA6878786.beecounthelper.WIDGET_REFRESH" />
+                <action android:name="io.github.USAMA6878786.beecounthelper.WIDGET_PING" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_expense_info" />
+        </receiver>
+
+        <!-- 颜色校准页：画已知纯色再抓自己，用来判定 raw 的通道顺序。
+             平时由设置页"打开图片压缩"自动拉起（自动模式测完自己关）；
+             也能用 adb 手动拉起来看明细：am start -n .../.ColorProbeActivity -->
+        <activity
+            android:name=".ColorProbeActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
+
+        <activity
+            android:name=".WidgetConfigActivity"
+            android:exported="false"
+            android:label="@string/widget_label"
+            android:theme="@android:style/Theme.DeviceDefault.Light" />
+
+        <!--
+            常驻服务：让模块进程不被系统回收。
+
+            不用它的时候，点磁贴要付一份能感觉到的代价——进程冷启动（发生在第一行日志之前）。
+            常驻之后点磁贴立刻响应，也让解冻校准/派发这些链路有余温。
+        -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="keep_the_quick_settings_tile_responsive" />
+        </service>
+
+        <!-- 开机拉起常驻服务 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".ShotTileService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile_shot"
+            android:label="@string/tile_label"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+
+    </application>
+</manifest>

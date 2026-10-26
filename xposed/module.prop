@@ -1,0 +1,11 @@
+id=io.github.USAMA6878786.beecounthelper
+name=BeeCountHelper
+version=v3.1
+versionCode=104
+author=xtgxiso
+description=为蜜蜂记账（BeeCount）提供「按需截图记账」与「支出桌面小组件」。默认拦截它对系统截图的自动识别；只有点控制中心「BeeCountHelper」磁贴那一次才收起面板、延迟截屏并交给它识别记账，识别完成后自动删除该截图。连点会排队逐个识别、不丢不重；注意：必须把蜜蜂记账的省电策略设为「无限制」，否则系统会周期性冻结它、导致识别失败。附带日/本周/本月支出桌面小组件，白底可调透明度、随宽度自适应横竖版式。
+minApiVersion=101
+targetApiVersion=102
+staticScope=false
+autoHotReload=false
+updateJson=https://raw.githubusercontent.com/USAMA6878786/BeeCountHelper/main/update.json

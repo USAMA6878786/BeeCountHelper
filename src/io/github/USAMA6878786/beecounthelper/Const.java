@@ -1,0 +1,274 @@
+package io.github.USAMA6878786.beecounthelper;
+
+/**
+ * 共享常量与路径拼装。
+ *
+ * <p>两条原则，都是被真机坑出来的：
+ * <ol>
+ *   <li><b>不写死包名。</b>蜂蜜记账有 prod / dev 两个构建风味，用户装哪个不确定。
+ *       包名写错的表现是"静默全失效"。</li>
+ *   <li><b>不写死数据目录。</b>真机上出现过"包名能查到、但 /data/user/0/&lt;包名&gt; 不存在"
+ *       的情况（双开 / 分身 / 非标准用户 id）。数据目录必须运行时探测。</li>
+ * </ol>
+ * 下面所有路径都由"实际探测到的数据目录"现拼。
+ */
+public final class Const {
+
+    /** 宿主候选包名（顺序即优先级）。 */
+    public static final String[] HOST_PKGS = new String[]{
+            "com.tntlikely.beecount",
+            "com.tntlikely.beecount.dev",
+    };
+
+    /** 默认包名，仅作为探测失败时的兜底。 */
+    public static final String HOST_PKG = HOST_PKGS[0];
+
+    /** 宿主里那个"截图监听器 -> Flutter 通道"的方法名，作为拦截闸门的识别依据。 */
+    public static final String TARGET_METHOD = "onScreenshotDetected";
+
+    /**
+     * 磁贴 -> 宿主进程 的"放行这一次"定向广播。
+     *
+     * <p>这是唯一的放行通道（早期的"写放行文件"方案已废弃，原因见 {@link ArmSignal}）。
+     */
+    public static final String ACTION_ARM = "io.github.USAMA6878786.beecounthelper.ARM";
+
+
+    /** 广播里携带的放行截止时间。 */
+    public static final String EXTRA_UNTIL = "until_ms";
+
+    /**
+     * 广播里携带的"允许按处理顺序推断着删"开关。
+     *
+     * <p>设置页的选项在模块 App 进程里，而删图判定在宿主进程里，两个进程够不着对方的
+     * SharedPreferences，所以只能跟着放行广播一起送过去（正好每次截屏前都会发一次）。
+     */
+    public static final String EXTRA_PRECISE = "precise";
+    /** 放行时一并告诉宿主"要不要删图"，否则它关着开关也照删。 */
+    public static final String EXTRA_AUTO_DELETE = "auto_delete";
+
+    /** 模块 → 宿主进程：起无界面引擎并派发一张截图。 */
+    public static final String ACTION_HEADLESS = "io.github.USAMA6878786.beecounthelper.HEADLESS";
+
+    /** 模块 App 的包名（宿主回广播时用）。 */
+    public static final String MODULE_PKG = "io.github.USAMA6878786.beecounthelper";
+
+    /**
+     * 模块 App -> 宿主 的查询广播。
+     *
+     * <p>为什么必须用广播而不是读文件：真机上查明，root 的 {@code su} 跑在**全局挂载命名
+     * 空间**，而应用的数据目录（CE 存储）挂载在应用自己的命名空间里——所以 {@code su}
+     * 根本看不到蜜蜂记账的数据目录，连 {@code dumpsys} 给出的
+     * {@code /data/user/0/&lt;包名&gt;} 都是"不存在"。
+     *
+     * <p>后果是：模块 App 写进去的放行文件宿主读不到，宿主写的遥测我们也读不到，
+     * 而且**全程不报错**。广播不涉及任何文件路径，是这条链路上唯一可靠的方式。
+     */
+    public static final String ACTION_QUERY = "io.github.USAMA6878786.beecounthelper.QUERY";
+
+    /** 宿主 -> 模块 App 的回答广播。 */
+    public static final String ACTION_RESULT = "io.github.USAMA6878786.beecounthelper.RESULT";
+
+    /** 查询/回答里携带的截图路径。 */
+    public static final String EXTRA_PATH = "path";
+
+    /** 该截图是否被宿主处理过。 */
+    public static final String EXTRA_PROCESSED = "processed";
+
+    /** 最近一次「自动记账成功」的时间戳。 */
+    public static final String EXTRA_SUCCESS_TS = "success_ts";
+
+    /** 宿主自己的 cacheDir——用来证实"su 看不到应用数据"这件事。 */
+    public static final String EXTRA_HOST_CACHE = "host_cache_dir";
+
+    /** 宿主侧遥测字段（直接以字符串形式塞进广播）。 */
+    public static final String EXTRA_TELEMETRY = "telemetry";
+
+    /**
+     * 是否为"决定性推送"。
+     *
+     * <p>普通回答是被动应答；决定性推送是宿主**主动**在检测到记账成功的那一刻发出的，
+     * 用来把模块 App 从系统冻结中唤醒。真机上就是因为应用退回后台被冻结，两条线程
+     * 一起停了近 30 秒，表现为"记账成功后又等了 20 多秒才删"。
+     */
+    public static final String EXTRA_DECISIVE = "decisive";
+
+    /**
+     * 宿主是否**已经自己把截图删掉了**。
+     *
+     * <p>删除动作现在主要由宿主完成：模块 App 会被系统后台冻结，而"广播唤醒缓存态应用"
+     * 会被延迟投递，靠它自己删就慢十几二十秒。宿主那一刻是醒着的，由它动手延迟只剩日志节流。
+     */
+    public static final String EXTRA_DELETED = "deleted";
+
+    /**
+     * 宿主给出的**最终判定**：这张截图确实被成功记账了，可以删。
+     *
+     * <p>为什么必须由宿下来判定而不是模块 App 自己算：判定要同时用到两个事实——
+     * "放行的是哪张图"（{@code LastShot}）和"成功发生在这个放行之后"。
+     * 只有宿主进程同时握有这两者。
+     *
+     * <p>反例（真机踩过）：模块 App 侧原来只检查"成功时间晚于本次截图"，结果一张
+     * **识别失败**（"未识别到账单"）的主页截图，因为前一次成功的时间恰好满足这个宽松条件，
+     * 被误删了。
+     */
+    public static final String EXTRA_SUCCESS = "success";
+
+    /** 蜜蜂记账的截图监听能力当前是否在位（主界面是否还活着）。 */
+    public static final String EXTRA_ACTIVITY_ALIVE = "activity_alive";
+
+    /** 宿主里成功安装的 hook 条数 / 失败条数（设置页直接显示，省得翻日志）。 */
+    public static final String EXTRA_HOOK_COUNT = "hook_count";
+    public static final String EXTRA_HOOK_FAILED = "hook_failed_count";
+
+    // ---------------------------------------------------------------- 桌面小组件
+
+    /** 模块 App -> 宿主：请求日/周/月支出合计。 */
+    public static final String ACTION_WIDGET_QUERY = "io.github.USAMA6878786.beecounthelper.WIDGET_QUERY";
+
+    /** 宿主 -> 模块 App：带回三个合计。 */
+    public static final String ACTION_WIDGET_RESULT = "io.github.USAMA6878786.beecounthelper.WIDGET_RESULT";
+
+    public static final String EXTRA_DAY_EXPENSE = "day_expense";
+    public static final String EXTRA_WEEK_EXPENSE = "week_expense";
+    public static final String EXTRA_MONTH_EXPENSE = "month_expense";
+    public static final String EXTRA_CURRENCY = "currency";
+    public static final String EXTRA_OK = "ok";
+    public static final String EXTRA_DETAIL = "detail";
+
+    /**
+     * 宿主 -> 模块 App：数据变了，请静默刷新桌面小组件（不打开任何界面）。
+     *
+     * <p>这条广播发给我们**清单里声明的** {@code ExpenseWidgetProvider}，所以即使模块 App
+     * 进程已经被系统回收，也能被它唤起来完成刷新。
+     */
+    public static final String ACTION_WIDGET_PING = "io.github.USAMA6878786.beecounthelper.WIDGET_PING";
+
+    /** 数据库文件名（蜜蜂记账用 drift，库放在应用文档目录）。 */
+    public static final String DB_NAME = "beecount.sqlite";
+
+    /**
+     * 模块 App 报告"桌面上现在有几个小组件"。
+     *
+     * <p>宿主据此决定要不要为"账目变动"发刷新通知——一个小组件都没有时就不打扰。
+     */
+    public static final String EXTRA_WIDGET_COUNT = "widget_count";
+
+    /** 统一日志 TAG。 */
+    public static final String TAG = "BeeShot";
+
+    /** 日志导出到 Download 时的子目录。 */
+    public static final String LOG_DIR = "BeecountShot";
+
+    /** logcat 导出到 Download 后的路径。 */
+    public static final String LOGCAT_PATH = "/sdcard/Download/" + LOG_DIR + "/logcat.txt";
+
+    /** 宿主日志文件名。 */
+    public static final String HOST_LOG_NAME = "beecount_shot_host.log";
+
+    /**
+     * 放行窗口的额外宽限时间。实际窗口 = 触发延迟 + 这个宽限值。
+     *
+     * <p>需要覆盖：面板收起 + 系统落库 + ContentObserver 回调 + Flutter 通道调用，
+     * 再留足余量。
+     *
+     * <p>v2.7 从 9 秒加到 14 秒：真机查明**蜜蜂记账上报一张截图要延迟约 10 秒**
+     * （截图 11:26:54 落盘，11:27:04 才调 {@code onScreenshotDetected}）。
+     * 9 秒时窗口在它上报前就过期了，连点两次必然漏掉第二张。
+     *
+     * <p>不用担心窗口长了会多放行：通行证是**一张换一次上报**，放行过一次就没了，
+     * 不会因为有窗口就把普通截图放进来。
+     */
+    public static final long ARM_GRACE_MS = 14000L;
+
+    /**
+     * 第一条截屏命令的确认窗口（毫秒）。后面几条命令仍用 {@link #SHOT_TRY_MS}。
+     *
+     * <p>真机实测：命令**生效时**，截图文件稳定在 **350ms 左右**就落盘了；
+     * **没生效时**，等到 2 秒也永远不会有。分布是双峰、中间是空的。
+     *
+     * <p>v2.19 曾把它压到 1 秒，但随后真机日志里出现了一次 **1168ms 才落盘** 的情况
+     * （10-11 10:50 那次 cmd[1]）——1 秒窗口太紧，万一第一条命令的图刚好在 1 秒之后才出现，
+     * 我们会在 1 秒时放弃并补发第二条，**结果多截一张**（多出来的那张没人记账、也不会被删）。
+     * 所以放回 **1.5 秒**：既比原来的 2 秒快，又留足余量。
+     */
+    public static final long SHOT_FIRST_TRY_MS = 1500L;
+
+    /** 后续候选命令的确认窗口。 */
+    public static final long SHOT_TRY_MS = 2000L;
+
+    /**
+     * 收起控制中心之后、发截屏请求之前，额外等这么久。
+     *
+     * <p><b>现在是 0</b>：收面板命令一返回就立刻抓帧，最快。
+     *
+     * <p>历史上这里放过 100ms / 150ms：换到"抓帧"方式之后截屏发得更早，
+     * 偶尔会拍到"控制中心刚收起、下层还在过渡"的那一帧，图能截到但发虚。
+     * 现在按用户要求去掉这段等待——`screencap` 本身是同步的，抓完才有结果。
+     *
+     * <p>如果某台机器上拍到了控制中心或过渡画面，把这个值调回 100~200 即可，
+     * 不需要改其它代码。
+     */
+    public static final long SHOT_SETTLE_MS = 100L;
+
+    /**
+     * {@code Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND} 的值（0x01000000）。
+     *
+     * <p>这个 flag 在 Android 里是**隐藏 API**，公开 SDK 的 android.jar 里没有这个常量，
+     * 直接引用 {@code Intent.FLAG_RECEIVER_INCLUDE_BACKGROUND} 会编译不过，所以把值抄在这里。
+     *
+     * <p>作用：带上它，系统会把广播直接投给处于后台（缓存态）的接收器，而不是排队等到
+     * 应用被解冻。这正是"root 补发广播"这条冗余通道的价值所在。
+     */
+    public static final int FLAG_RECEIVER_INCLUDE_BACKGROUND = 0x01000000;
+
+    // ---------------------------------------------------------------- 宿主路径
+
+    /** 宿主自己进程日志的候选路径（宿主写自己的目录；属辅助通道，主通道是广播遥测）。 */
+    public static String[] hostLogCandidates(String pkg) {
+        return new String[]{
+                "/data/user/0/" + pkg + "/cache/" + HOST_LOG_NAME,
+                "/data/data/" + pkg + "/cache/" + HOST_LOG_NAME,
+                "/data/user_de/0/" + pkg + "/cache/" + HOST_LOG_NAME,
+        };
+    }
+
+    // ---------------------------------------------------------------- 判定关键词
+
+    /** 记账成功的日志文案（取自 AutoBillingService.processScreenshot）。 */
+    public static final String SUCCESS_LOG_MARKER = "自动记账成功";
+
+    /**
+     * 每处理完一张截图就会写一条的日志文案，成功失败都有。
+     *
+     * <p>这是**唯一能精确配对**的信号：真机日志显示它长这样——
+     * <pre>
+     *   AI 识别 + 落库完成 | Data: 耗时=6313ms, 成功=1 笔, 失败=0   ← 这张有账目
+     *   AI 识别 + 落库完成 | Data: 耗时=4020ms, 成功=0 笔, 失败=0   ← 这张未识别到账单
+     * </pre>
+     * 一条对应一张截图，按时间先后就能和"闸门放行的先后"一一对上，
+     * 不必再靠"先截的先出结果"去猜。
+     *
+     * <p>只取 {@code 落库完成} 四个字而不是整句，避免以后它改了措辞（比如换个耗时写法）
+     * 就整个失效。真失效了也只是退回次数推断，不会删错。
+     */
+    public static final String OUTCOME_LOG_MARKER = "落库完成";
+
+    /** 上面那条日志里表示"识别出几笔账"的字段名。 */
+
+    /** Dart 日志在 SharedPreferences 里的 key。 */
+    public static final String K_APP_LOGS = "flutter.app_logs";
+
+    /** 已处理截图列表在 SharedPreferences 里的 key。 */
+    public static final String K_PROCESSED = "flutter.processed_screenshots";
+
+    /** 截图可能存在的目录（各厂商不同；不列 /storage/emulated/0 那种重复写法）。 */
+    public static final String[] SCREENSHOT_DIRS = new String[]{
+            "/sdcard/Pictures/Screenshots",
+            "/sdcard/DCIM/Screenshots",
+            "/sdcard/Screenshots",
+    };
+
+    private Const() {
+    }
+}

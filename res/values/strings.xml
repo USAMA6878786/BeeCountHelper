@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BeeCountHelper</string>
+    <string name="tile_label">BeeCountHelper</string>
+    <string name="widget_label">记账支出</string>
+    <string name="module_description">按需触发的截图记账：默认拦截蜜蜂记账对系统截图的自动识别，只有点击控制中心「BeeCountHelper」磁贴那一次，才收起面板、延迟截屏并交给 BeeCount 识别记账。</string>
+</resources>
